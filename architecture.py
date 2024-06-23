@@ -133,23 +133,25 @@ class SimpleConvTestNet(nn.Module):
                             min_filter_index = filt_idx
                             min_kernel_index = kern_idx
                 most_similar_indices.append((min_filter_index, min_kernel_index))
-
         return torch.tensor(most_similar_indices)
 
-    def find_most_similar_filters(self, filters, filters_conv3, batch_size=16):
+    def find_most_similar_filters(self, filters, filters_conv3, batch_size=4):
         # Initialize lists to store the indices of most similar filters
         most_similar_indices = []
 
         num_filters = filters.shape[0]
         num_conv3_filters = filters_conv3.shape[0]
 
-        # Process in batches to reduce memory usage
+        # Loop through each filter in batches
         for i in range(0, num_filters, batch_size):
             batch_filters = filters[i:i + batch_size]
             batch_filters = batch_filters.view(-1, 1, *batch_filters.shape[2:])  # Shape: [batch_size*num_kernels, 1, 3, 3]
 
-            min_loss_indices_batch = []
+            # Initialize tensors to store the minimum loss and indices
+            min_losses = torch.full((batch_filters.shape[0],), float('inf')).to(batch_filters.device)
+            min_indices = torch.full((batch_filters.shape[0],), -1, dtype=torch.long).to(batch_filters.device)
 
+            # Process in batches to reduce memory usage
             for j in range(0, num_conv3_filters, batch_size):
                 batch_filters_conv3 = filters_conv3[j:j + batch_size]
                 batch_filters_conv3 = batch_filters_conv3.view(1, -1, *batch_filters_conv3.shape[2:])  # Shape: [1, batch_size*num_kernels_conv3, 3, 3]
@@ -157,17 +159,26 @@ class SimpleConvTestNet(nn.Module):
                 # Calculate the MSE for all kernel pairs at once using broadcasting
                 mse_losses = ((batch_filters - batch_filters_conv3) ** 2).mean(dim=(-1, -2))  # Shape: [batch_size*num_kernels, batch_size*num_kernels_conv3]
 
-                # Find the minimum MSE values and their corresponding indices
-                min_loss_indices = torch.argmin(mse_losses, dim=1)  # Shape: [batch_size*num_kernels]
-                min_loss_indices_batch.append(min_loss_indices)
+                # Find the minimum MSE values and their corresponding indices within the current batch
+                batch_min_losses, batch_min_indices = torch.min(mse_losses, dim=1)  # Shape: [batch_size*num_kernels]
 
-            min_loss_indices_batch = torch.cat(min_loss_indices_batch, dim=0)
-            for idx in min_loss_indices_batch:
-                filter_index = idx // filters_conv3.size(1)
-                kernel_index = idx % filters_conv3.size(1)
-                most_similar_indices.append((filter_index.item(), kernel_index.item()))
+                # Update the global minimum losses and indices
+                update_mask = batch_min_losses < min_losses
+                min_losses[update_mask] = batch_min_losses[update_mask]
+                min_indices[update_mask] = batch_min_indices[update_mask] + j  # Correct the indices relative to the whole filters_conv3
 
-        return torch.tensor(most_similar_indices)
+            # Append the indices for the current batch
+            most_similar_indices.append(min_indices)
+
+        # Concatenate indices from all batches
+        most_similar_indices = torch.cat(most_similar_indices)
+
+        # Convert the indices to filter and kernel indices
+        filter_indices = most_similar_indices // filters_conv3.size(1)
+        kernel_indices = most_similar_indices % filters_conv3.size(1)
+        
+        return torch.stack((filter_indices, kernel_indices), dim=1)
+
 
     def compute_filter_similarity_loss(self):
         # Get filters from conv3
@@ -189,15 +200,19 @@ class SimpleConvTestNet(nn.Module):
         mse_loss = nn.MSELoss()
 
         # Compute MSE losses
-        import pdb;pdb.set_trace()
-        sim_loss1 = mse_loss(filters_conv1, filters_conv3[self.most_similar_indices['conv1']])
-        sim_loss2 = mse_loss(filters_conv2, filters_conv3[self.most_similar_indices['conv2']])
-        sim_loss4 = mse_loss(filters_conv4, filters_conv3[self.most_similar_indices['conv4']])
 
+        similarity_loss = 0.0
+        for filters, key in zip([filters_conv1, filters_conv2, filters_conv4], ["conv1", "conv2", "conv4"]):
+            conv_idx = self.most_similar_indices[key]
+            selected_kernels = torch.empty(conv_idx.size(0), 3, 3, device=filters_conv3.device, dtype=filters_conv3.dtype)
+            for i, (f_idx, k_idx) in enumerate(conv_idx):
+                selected_kernels[i] = filters_conv3[f_idx, k_idx]
+            reshaped_filters = filters.view(-1, *filters.shape[2:])  # Shape [384, 1, 3, 3]
+            sim_loss = mse_loss(reshaped_filters, selected_kernels)
+            similarity_loss = similarity_loss + sim_loss
         # Aggregate similarity losses
-        total_sim_loss = (sim_loss1 + sim_loss2 + sim_loss4) / 3
         
-        return total_sim_loss
+        return similarity_loss
 
 
 class SimpleConvTestNetDecomp(nn.Module):
