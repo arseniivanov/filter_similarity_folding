@@ -190,13 +190,11 @@ class SimpleConvTestNet(nn.Module):
         filters_conv4 = self.conv4.weight  # shape: [128, 512, 3, 3]
 
         # Find and store the indices of the most similar filters
-        if self.most_similar_indices['conv1'] is None:
-            self.most_similar_indices['conv1'] = self.find_most_similar_filters(filters_conv1, filters_conv3)
-        if self.most_similar_indices['conv2'] is None:
-            self.most_similar_indices['conv2'] = self.find_most_similar_filters(filters_conv2, filters_conv3)
-        if self.most_similar_indices['conv4'] is None:
-            self.most_similar_indices['conv4'] = self.find_most_similar_filters(filters_conv4, filters_conv3)
-        print("Found all similarity indices")
+        print("Computing most fimilar filter indices...")
+        self.most_similar_indices['conv1'] = self.find_most_similar_filters(filters_conv1, filters_conv3)
+        self.most_similar_indices['conv2'] = self.find_most_similar_filters(filters_conv2, filters_conv3)
+        self.most_similar_indices['conv4'] = self.find_most_similar_filters(filters_conv4, filters_conv3)
+        print("Found all similarity indices.")
         mse_loss = nn.MSELoss()
 
         # Compute MSE losses

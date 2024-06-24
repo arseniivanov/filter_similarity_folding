@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from architecture import *
 import os
 
-def train(model, train_loader, optimizer, scheduler, criterion, epochs=15, alpha=0.001, beta=0.00001, pretrained=False):
+def train(model, train_loader, optimizer, scheduler, criterion, epochs=15, alpha=0.001, beta=0.00001, pretrained=False, similarity_optimizer=None, testloader=None):
     model.train()
     for epoch in range(epochs):
         print(f"Starting epoch {epoch+1}")
@@ -24,7 +24,7 @@ def train(model, train_loader, optimizer, scheduler, criterion, epochs=15, alpha
             running_loss += loss.item()
 
         if pretrained: 
-            similarity_loss = model.compute_filter_similarity_loss()
+            similarity_loss = model.compute_filter_similarity_loss() * 1000
             optimizer.zero_grad()
             similarity_loss.backward()
             optimizer.step()
@@ -33,6 +33,23 @@ def train(model, train_loader, optimizer, scheduler, criterion, epochs=15, alpha
         scheduler.step()
         #print(f'Epoch {epoch+1}, Average Loss: {running_loss / len(train_loader)}, Similarity Loss: {similarity_loss.item()}')
         print(f'Epoch {epoch+1}, Average Loss: {running_loss / len(train_loader)}')
+        if testloader is not None:
+            model.eval()
+            test_loss = 0.0
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for test_images, test_labels in testloader:
+                    test_images, test_labels = test_images.to(device), test_labels.to(device)
+                    test_outputs = model(test_images)
+                    test_loss += criterion(test_outputs, test_labels).item()
+                    _, predicted = torch.max(test_outputs, 1)
+                    total += test_labels.size(0)
+                    correct += (predicted == test_labels).sum().item()
+            test_loss /= len(testloader)
+            accuracy = 100 * correct / total
+            print(f'Test Loss: {test_loss}, Test Accuracy: {accuracy}%')
+            model.train()
     
     print('Finished Training')
 
@@ -55,13 +72,17 @@ transform = transforms.Compose([
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 trainloader = DataLoader(trainset, batch_size=512, shuffle=True, num_workers=2)
 
+testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+testloader = DataLoader(testset, batch_size=512, shuffle=False, num_workers=2)
+
 # Define optimizer and scheduler
 optimizer = optim.AdamW(model.parameters(), lr=0.0005, weight_decay=1e-5)
+similarity_optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 criterion = nn.CrossEntropyLoss()
 
 # Train the model
-train(model, trainloader, optimizer, scheduler, criterion, epochs=20, pretrained=pretrained)
+train(model, trainloader, optimizer, scheduler, criterion, epochs=20, pretrained=pretrained, similarity_optimizer=similarity_optimizer, testloader=testloader)
 
 # Save the entire model
 torch.save(model, 'easy_net.pth')
